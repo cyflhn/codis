@@ -22,7 +22,7 @@ import (
 	"github.com/wandoulabs/codis/pkg/proxy"
 	"github.com/wandoulabs/codis/pkg/proxy/router"
 	"github.com/wandoulabs/codis/pkg/utils"
-	"github.com/wandoulabs/codis/pkg/utils/bytesize"
+	_ "github.com/wandoulabs/codis/pkg/utils/bytesize"
 	"github.com/wandoulabs/codis/pkg/utils/log"
 )
 
@@ -33,7 +33,7 @@ var (
 	configFile = "config.ini"
 )
 
-var usage = `usage: proxy [-c <config_file>] [-L <log_file>] [--log-level=<loglevel>] [--log-filesize=<filesize>] [--cpu=<cpu_num>] [--addr=<proxy_listen_addr>] [--http-addr=<debug_http_server_addr>]
+var usage = `usage: proxy [-c <config_file>] [-L <log_file>] [-IL <log_file>] [--log-level=<loglevel>] [--log-filesize=<filesize>] [--cpu=<cpu_num>] [--addr=<proxy_listen_addr>] [--http-addr=<debug_http_server_addr>]
 
 options:
    -c	set config file
@@ -74,6 +74,7 @@ func setLogLevel(level string) {
 		l = log.LEVEL_INFO
 	}
 	log.SetLevel(l)
+	log.SetInfoLogLevel(l)
 	log.Infof("set log level to <%s>", level)
 }
 
@@ -117,19 +118,21 @@ func main() {
 		configFile = args["-c"].(string)
 	}
 
-	var maxFileFrag = 10
-	var maxFragSize int64 = bytesize.GB * 1
-	if s, ok := args["--log-filesize"].(string); ok && s != "" {
-		v, err := bytesize.Parse(s)
-		if err != nil {
-			log.PanicErrorf(err, "invalid max log file size = %s", s)
+	/*
+		var maxFileFrag = 10
+		var maxFragSize int64 = bytesize.GB * 1
+		if s, ok := args["--log-filesize"].(string); ok && s != "" {
+			v, err := bytesize.Parse(s)
+			if err != nil {
+				log.PanicErrorf(err, "invalid max log file size = %s", s)
+			}
+			maxFragSize = v
 		}
-		maxFragSize = v
-	}
-
+	*/
 	// set output log file
 	if s, ok := args["-L"].(string); ok && s != "" {
-		f, err := log.NewRollingFile(s, maxFileFrag, maxFragSize)
+		//f, err := log.NewRollingFile(s, maxFileFrag, maxFragSize)
+		f, err := log.GetLogFile(s)
 		if err != nil {
 			log.PanicErrorf(err, "open rolling log file failed: %s", s)
 		} else {
@@ -139,6 +142,20 @@ func main() {
 	}
 	log.SetLevel(log.LEVEL_INFO)
 	log.SetFlags(log.Flags() | log.Lshortfile)
+
+	// set info log file
+	if s, ok := args["-IL"].(string); ok && s != "" {
+		//f, err := log.NewRollingFile(s, maxFileFrag, maxFragSize)
+		f, err := log.GetLogFile(s)
+		if err != nil {
+			log.PanicErrorf(err, "open info log file failed: %s", s)
+		} else {
+			defer f.Close()
+			log.InfoLog = log.New(f, "")
+		}
+	}
+	log.SetInfoLogLevel(log.LEVEL_INFO)
+	log.SetInfoLogFlags(log.Flags() | log.Lshortfile)
 
 	// set log level
 	if s, ok := args["--log-level"].(string); ok && s != "" {
@@ -176,7 +193,7 @@ func main() {
 	}
 
 	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM, os.Kill)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT, os.Kill)
 
 	s := proxy.New(addr, httpAddr, conf)
 	defer s.Close()

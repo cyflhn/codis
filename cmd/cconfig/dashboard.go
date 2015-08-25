@@ -228,7 +228,7 @@ func runDashboard(addr string, httpLogFile string) {
 
 	// create temp node in ZK
 	if err := createDashboardNode(); err != nil {
-		log.PanicErrorf(err, "create zk node failed") // do not release dashborad node here
+		log.WarnErrorf(err, "create zk node failed") // do not release dashborad node here
 	}
 
 	// create long live migrate manager
@@ -250,4 +250,5 @@ func runDashboard(addr string, httpLogFile string) {
 	}()
 
 	m.RunOnAddr(addr)
+	//log.Warn("3")
 }
