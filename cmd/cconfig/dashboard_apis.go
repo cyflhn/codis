@@ -16,6 +16,7 @@ import (
 	"github.com/wandoulabs/zkhelper"
 
 	"github.com/wandoulabs/codis/pkg/models"
+	"github.com/wandoulabs/codis/pkg/proxy/router"
 	"github.com/wandoulabs/codis/pkg/utils"
 	"github.com/wandoulabs/codis/pkg/utils/log"
 )
@@ -469,7 +470,6 @@ func apiActionGC(r *http.Request) (int, string) {
 			log.ErrorErrorf(err, "unlock node failed")
 		}
 	}()
-
 	var err error
 	if keep >= 0 {
 		err = models.ActionGC(safeZkConn, globalEnv.ProductName(), models.GC_TYPE_N, keep)
@@ -499,4 +499,18 @@ func apiRemoveFence() (int, string) {
 	}
 	return jsonRetSucc()
 
+}
+
+func apiKeySlot(param martini.Params) (int, string) {
+	key := param["key"]
+	//log.Infof("key: %s %+v", key, []byte(key))
+	slot := router.GetHashSlot([]byte(key))
+	return 200, strconv.Itoa(int(slot))
+}
+
+func apiRemoveMigration() (int, string) {
+	if err := globalMigrateManager.RemoveMigrations(); err != nil {
+		log.Warnf("RemoveMigration error: %+v", err)
+	}
+	return 200, "ok"
 }

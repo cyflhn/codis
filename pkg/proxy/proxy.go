@@ -20,6 +20,12 @@ import (
 	"github.com/wandoulabs/codis/pkg/utils/log"
 )
 
+const (
+	SERVER_STATUS_STOP     = 0
+	SERVER_STATUS_STARTING = 1
+	SERVER_STATUS_STARTED  = 2
+)
+
 type Server struct {
 	conf   *Config
 	topo   *Topology
@@ -32,9 +38,11 @@ type Server struct {
 	router   *router.Router
 	listener net.Listener
 
-	kill chan interface{}
-	wait sync.WaitGroup
-	stop sync.Once
+	kill      chan interface{}
+	wait      sync.WaitGroup
+	stop      sync.Once
+	startLock sync.Mutex
+	status    int //
 }
 
 func New(addr string, debugVarAddr string, conf *Config) *Server {
@@ -93,9 +101,7 @@ func (s *Server) serve() {
 
 	s.rewatchNodes()
 
-	for i := 0; i < router.MaxSlotNum; i++ {
-		s.fillSlot(i)
-	}
+	s.fillSlots()
 
 	go func() {
 		defer s.close()
@@ -121,7 +127,24 @@ func (s *Server) handleConns() {
 		if err != nil {
 			return
 		} else {
-			ch <- c
+			if s.status == SERVER_STATUS_STARTING {
+				s.listener.Close()
+				for {
+					if s.status == SERVER_STATUS_STARTED {
+						if l, err := net.Listen("tcp", ":"+strings.Split(s.info.Addr, ":")[1]); err != nil {
+							log.ErrorErrorf(err, "open listener failed")
+							time.Sleep(5 * time.Second)
+						} else {
+							s.listener = l
+							break
+						}
+					} else {
+						time.Sleep(5 * time.Second)
+					}
+				}
+			} else {
+				ch <- c
+			}
 		}
 	}
 }
@@ -151,26 +174,67 @@ func (s *Server) close() {
 }
 
 func (s *Server) rewatchProxy() {
-	_, err := s.topo.WatchNode(path.Join(models.GetProxyPath(s.topo.ProductName), s.info.Id), s.evtbus)
-	if err != nil {
-		log.PanicErrorf(err, "watch node failed")
+	var err error
+	for {
+		_, err = s.topo.WatchNode(path.Join(models.GetProxyPath(s.topo.ProductName), s.info.Id), s.evtbus)
+		if err != nil {
+			log.ErrorErrorf(err, "watch node failed")
+			if s.topo.IsFatalErr(err) {
+				s.reRegister(models.PROXY_STATE_ONLINE)
+			} else {
+				time.Sleep(5 * time.Second)
+			}
+		} else {
+			break
+		}
 	}
 }
 
 func (s *Server) rewatchNodes() []string {
-	nodes, err := s.topo.WatchChildren(models.GetWatchActionPath(s.topo.ProductName), s.evtbus)
-	if err != nil {
-		log.PanicErrorf(err, "watch children failed")
+	var nodes []string
+	var err error
+	for {
+		nodes, err = s.topo.WatchChildren(models.GetWatchActionPath(s.topo.ProductName), s.evtbus)
+		if err != nil {
+			log.ErrorErrorf(err, "watch children failed")
+			if s.topo.IsFatalErr(err) {
+				s.reRegisterAndReWatchPrxoy(models.PROXY_STATE_ONLINE)
+			} else {
+				time.Sleep(5 * time.Second)
+			}
+		} else {
+			break
+		}
 	}
 	return nodes
 }
 
 func (s *Server) register() {
-	if _, err := s.topo.CreateProxyInfo(&s.info); err != nil {
-		log.PanicErrorf(err, "create proxy node failed")
+	var err error
+	for {
+		if _, err = s.topo.CreateProxyInfo(&s.info); err != nil {
+			log.ErrorErrorf(err, "create proxy node failed")
+			if s.topo.IsErrSessionExpired(err) {
+				s.topo.RefreshZkConn()
+			}
+			time.Sleep(ZK_RECONNECT_INTERVAL * time.Second)
+		} else {
+			break
+		}
 	}
-	if _, err := s.topo.CreateProxyFenceNode(&s.info); err != nil {
-		log.PanicErrorf(err, "create fence node failed")
+
+	for {
+		if _, err = s.topo.CreateProxyFenceNode(&s.info); err != nil {
+			log.ErrorErrorf(err, "create fence node failed")
+			if s.topo.IsErrSessionExpired(err) {
+				s.topo.RefreshZkConn()
+			} else if s.topo.IsErrNodeExist(err) {
+				break
+			}
+			time.Sleep(ZK_RECONNECT_INTERVAL * time.Second)
+		} else {
+			break
+		}
 	}
 }
 
@@ -183,7 +247,11 @@ func (s *Server) waitOnline() bool {
 	for {
 		info, err := s.topo.GetProxyInfo(s.info.Id)
 		if err != nil {
-			log.PanicErrorf(err, "get proxy info failed: %s", s.info.Id)
+			log.ErrorErrorf(err, "get proxy info failed: %s", s.info.Id)
+			if s.topo.IsFatalErr(err) {
+				s.reRegister(models.PROXY_STATE_MARK_OFFLINE)
+			}
+			continue
 		}
 		switch info.State {
 		case models.PROXY_STATE_MARK_OFFLINE:
@@ -234,13 +302,13 @@ func groupMaster(groupInfo models.ServerGroup) string {
 	for _, server := range groupInfo.Servers {
 		if server.Type == models.SERVER_TYPE_MASTER {
 			if master != "" {
-				log.Panicf("two master not allowed: %+v", groupInfo)
+				log.Errorf("two master not allowed: %+v", groupInfo)
 			}
 			master = server.Addr
 		}
 	}
 	if master == "" {
-		log.Panicf("master not found: %+v", groupInfo)
+		log.Errorf("master not found: %+v", groupInfo)
 	}
 	return master
 }
@@ -249,10 +317,11 @@ func (s *Server) resetSlot(i int) {
 	s.router.ResetSlot(i)
 }
 
-func (s *Server) fillSlot(i int) {
+func (s *Server) fillSlot(i int) error {
 	slotInfo, slotGroup, err := s.topo.GetSlotByIndex(i)
 	if err != nil {
-		log.PanicErrorf(err, "get slot by index failed", i)
+		log.ErrorErrorf(err, "get slot by index failed", i)
+		return err
 	}
 
 	var from string
@@ -260,17 +329,26 @@ func (s *Server) fillSlot(i int) {
 	if slotInfo.State.Status == models.SLOT_STATUS_MIGRATE {
 		fromGroup, err := s.topo.GetGroup(slotInfo.State.MigrateStatus.From)
 		if err != nil {
-			log.PanicErrorf(err, "get migrate from failed")
+			log.ErrorErrorf(err, "get migrate from failed")
+			return err
 		}
+
 		from = groupMaster(*fromGroup)
 		if from == addr {
-			log.Panicf("set slot %04d migrate from %s to %s", i, from, addr)
+			log.Errorf("set slot %04d migrate from %s to %s", i, from, addr)
+			return nil
+		}
+
+		if "" == addr {
+			log.Errorf("set slot %04d addr nil", i)
+			return nil
 		}
 	}
 
 	s.groups[i] = slotInfo.GroupId
 	s.router.FillSlot(i, addr, from,
 		slotInfo.State.Status == models.SLOT_STATUS_PRE_MIGRATE)
+	return err
 }
 
 func (s *Server) onSlotRangeChange(param *models.SlotMultiSetParam) {
@@ -280,9 +358,12 @@ func (s *Server) onSlotRangeChange(param *models.SlotMultiSetParam) {
 		case models.SLOT_STATUS_OFFLINE:
 			s.resetSlot(i)
 		case models.SLOT_STATUS_ONLINE:
-			s.fillSlot(i)
+			if err := s.fillSlot(i); err != nil {
+				s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
+				break
+			}
 		default:
-			log.Panicf("can not handle status %v", param.Status)
+			log.Errorf("can not handle status %v", param.Status)
 		}
 	}
 }
@@ -291,7 +372,10 @@ func (s *Server) onGroupChange(groupId int) {
 	log.Infof("group changed %d", groupId)
 	for i, g := range s.groups {
 		if g == groupId {
-			s.fillSlot(i)
+			if err := s.fillSlot(i); err != nil {
+				s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
+				break
+			}
 		}
 	}
 }
@@ -304,21 +388,22 @@ func (s *Server) responseAction(seq int64) {
 	}
 }
 
-func (s *Server) getActionObject(seq int, target interface{}) {
+func (s *Server) getActionObject(seq int, target interface{}) error {
 	act := &models.Action{Target: target}
 	err := s.topo.GetActionWithSeqObject(int64(seq), act)
 	if err != nil {
-		log.PanicErrorf(err, "get action object failed, seq = %d", seq)
+		log.ErrorError(err, "get action object failed, seq = %d", seq)
 	}
 	log.Infof("action %+v", act)
+	return err
 }
 
 func (s *Server) checkAndDoTopoChange(seq int) bool {
 	act, err := s.topo.GetActionWithSeq(int64(seq))
-	if err != nil { //todo: error is not "not exist"
-		log.PanicErrorf(err, "action failed, seq = %d", seq)
+	if err != nil {
+		s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
+		return false
 	}
-
 	if !needResponse(act.Receivers, s.info) { //no need to response
 		return false
 	}
@@ -329,29 +414,41 @@ func (s *Server) checkAndDoTopoChange(seq int) bool {
 	case models.ACTION_TYPE_SLOT_MIGRATE, models.ACTION_TYPE_SLOT_CHANGED,
 		models.ACTION_TYPE_SLOT_PREMIGRATE:
 		slot := &models.Slot{}
-		s.getActionObject(seq, slot)
+		if err := s.getActionObject(seq, slot); err != nil {
+			return false
+		}
 		s.fillSlot(slot.Id)
 	case models.ACTION_TYPE_SERVER_GROUP_CHANGED:
 		serverGroup := &models.ServerGroup{}
-		s.getActionObject(seq, serverGroup)
+		if err := s.getActionObject(seq, serverGroup); err != nil {
+			return false
+		}
 		s.onGroupChange(serverGroup.Id)
 	case models.ACTION_TYPE_SERVER_GROUP_REMOVE:
 	//do not care
 	case models.ACTION_TYPE_MULTI_SLOT_CHANGED:
 		param := &models.SlotMultiSetParam{}
-		s.getActionObject(seq, param)
+		if err := s.getActionObject(seq, param); err != nil {
+			return false
+		}
 		s.onSlotRangeChange(param)
 	default:
-		log.Panicf("unknown action %+v", act)
+		log.Errorf("unknown action %+v", act)
 	}
 	return true
 }
 
 func (s *Server) processAction(e interface{}) {
+	if s.topo.IsSessionExpiredEvent(e) {
+		s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
+		return
+	}
 	if strings.Index(getEventPath(e), models.GetProxyPath(s.topo.ProductName)) == 0 {
 		info, err := s.topo.GetProxyInfo(s.info.Id)
 		if err != nil {
-			log.PanicErrorf(err, "get proxy info failed: %s", s.info.Id)
+			log.ErrorErrorf(err, "get proxy info failed: %s", s.info.Id)
+			s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
+			return
 		}
 		switch info.State {
 		case models.PROXY_STATE_MARK_OFFLINE:
@@ -360,7 +457,7 @@ func (s *Server) processAction(e interface{}) {
 		case models.PROXY_STATE_ONLINE:
 			s.rewatchProxy()
 		default:
-			log.Panicf("unknown proxy state %v", info)
+			log.Errorf("unknown proxy state %+v", info)
 		}
 		return
 	}
@@ -370,7 +467,9 @@ func (s *Server) processAction(e interface{}) {
 
 	seqs, err := models.ExtraSeqList(nodes)
 	if err != nil {
-		log.PanicErrorf(err, "get seq list failed")
+		log.ErrorErrorf(err, "get seq list failed")
+		s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
+		return
 	}
 
 	if len(seqs) == 0 || !s.topo.IsChildrenChangedEvent(e) {
@@ -394,7 +493,9 @@ func (s *Server) processAction(e interface{}) {
 	for _, seq := range actions {
 		exist, err := s.topo.Exist(path.Join(s.topo.GetActionResponsePath(seq), s.info.Id))
 		if err != nil {
-			log.PanicErrorf(err, "get action failed")
+			log.ErrorErrorf(err, "get action failed")
+			s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
+			return
 		}
 		if exist {
 			continue
@@ -441,4 +542,75 @@ func (s *Server) loopEvents() {
 			}
 		}
 	}
+}
+
+func (s *Server) reRegister(state string) {
+	if s.isStarting() {
+		log.Infof("server is restarting")
+		return
+	}
+	s.info.State = state
+	s.topo.Close(s.info.Id)
+	s.topo.InitZkConn()
+	s.register()
+	s.setServerStatus(SERVER_STATUS_STARTED)
+}
+
+func (s *Server) fillSlots() {
+	for i := 0; i < router.MaxSlotNum; i++ {
+		if err := s.fillSlot(i); err != nil {
+			s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
+			break
+		}
+	}
+}
+
+func (s *Server) reRegisterAndReWatchPrxoy(state string) {
+	if s.isStarting() {
+		log.Infof("server is restarting")
+		return
+	}
+	log.Warnf("server will restart")
+	s.setServerStatus(SERVER_STATUS_STARTING)
+	s.info.State = state
+	s.cleanup()
+	s.topo.InitZkConn()
+	s.register()
+	s.rewatchProxy()
+	s.setServerStatus(SERVER_STATUS_STARTED)
+}
+
+func (s *Server) reRegisterAndFillSlots(state string) {
+	if s.isStarting() {
+		log.Infof("server is restarting")
+		return
+	}
+	log.Warnf("server will restart")
+	s.setServerStatus(SERVER_STATUS_STARTING)
+	s.info.State = state
+	s.cleanup()
+	s.topo.InitZkConn()
+	s.register()
+	s.rewatchProxy()
+	s.rewatchNodes()
+	s.fillSlots()
+	s.setServerStatus(SERVER_STATUS_STARTED)
+}
+
+func (s *Server) isStarting() bool {
+	s.startLock.Lock()
+	defer s.startLock.Unlock()
+	return s.status == SERVER_STATUS_STARTING
+}
+
+func (s *Server) setServerStatus(status int) {
+	s.startLock.Lock()
+	defer s.startLock.Unlock()
+	s.status = status
+}
+
+func (s *Server) cleanup() {
+	close(s.evtbus)
+	s.evtbus = make(chan interface{}, 1000)
+	s.topo.Close(s.info.Id)
 }

@@ -152,6 +152,7 @@ func (s *Session) handleResponse(r *Request) (*redis.Resp, error) {
 		return nil, ErrRespIsRequired
 	}
 	incrOpStats(r.OpStr, microseconds()-r.Start)
+	log.InfoLogInfo("invoke %s time %d ", getOpKeyStr(r.Resp), miliseconds(microseconds()-r.Start))
 	return resp, nil
 }
 
@@ -391,4 +392,8 @@ func (s *Session) handleRequestMDel(r *Request, d Dispatcher) (*Request, error) 
 
 func microseconds() int64 {
 	return time.Now().UnixNano() / int64(time.Microsecond)
+}
+
+func miliseconds(microtime int64) int64 {
+	return microtime / int64(time.Millisecond)
 }

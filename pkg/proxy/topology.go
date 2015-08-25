@@ -13,6 +13,11 @@ import (
 	"github.com/wandoulabs/codis/pkg/utils/errors"
 	"github.com/wandoulabs/codis/pkg/utils/log"
 	"github.com/wandoulabs/zkhelper"
+	"time"
+)
+
+const (
+	ZK_RECONNECT_INTERVAL = 5
 )
 
 type TopoUpdate interface {
@@ -20,7 +25,12 @@ type TopoUpdate interface {
 	OnSlotChange(slotId int)
 }
 
-type ZkFactory func(zkAddr string, zkSessionTimeout int) (zkhelper.Conn, error)
+//type ZkFactory func(zkAddr string, zkSessionTimeout int) (zkhelper.Conn, error)
+
+type ZkFactory interface {
+	Connect(Addr string, SessionTimeout int) (zkhelper.Conn, error)
+	ConnectWithConf(Addr string, conf zkhelper.NetConf) (zkhelper.Conn, error)
+}
 
 type Topology struct {
 	ProductName      string
@@ -29,38 +39,92 @@ type Topology struct {
 	fact             ZkFactory
 	provider         string
 	zkSessionTimeout int
+	readTimeout      int
+	connTimeout      int
 }
 
 func (top *Topology) GetGroup(groupId int) (*models.ServerGroup, error) {
-	return models.GetGroup(top.zkConn, top.ProductName, groupId)
+	var group *models.ServerGroup
+	var err error
+	for {
+		group, err = models.GetGroup(top.zkConn, top.ProductName, groupId)
+		if err == nil || top.IsFatalErr(err) {
+			break
+		} else {
+			time.Sleep(ZK_RECONNECT_INTERVAL * time.Second)
+		}
+		if err != nil {
+			log.ErrorErrorf(err, " GetGroup ")
+		}
+	}
+	return group, err
 }
 
 func (top *Topology) Exist(path string) (bool, error) {
-	return zkhelper.NodeExists(top.zkConn, path)
+	var exist bool
+	var err error
+	for {
+		exist, err = zkhelper.NodeExists(top.zkConn, path)
+		if err == nil || top.IsFatalErr(err) {
+			break
+		} else {
+			time.Sleep(ZK_RECONNECT_INTERVAL * time.Second)
+		}
+		if err != nil {
+			log.ErrorErrorf(err, " Exist ")
+		}
+	}
+	return exist, err
 }
 
 func (top *Topology) GetSlotByIndex(i int) (*models.Slot, *models.ServerGroup, error) {
-	slot, err := models.GetSlot(top.zkConn, top.ProductName, i)
+	var slot *models.Slot
+	var groupServer *models.ServerGroup
+	var err error
+	for {
+		slot, err = models.GetSlot(top.zkConn, top.ProductName, i)
+		if err == nil || top.IsFatalErr(err) {
+			break
+		} else {
+			time.Sleep(ZK_RECONNECT_INTERVAL * time.Second)
+		}
+		if err != nil {
+			log.ErrorErrorf(err, " GetSlot ")
+		}
+	}
 	if err != nil {
 		return nil, nil, errors.Trace(err)
 	}
 
-	groupServer, err := models.GetGroup(top.zkConn, top.ProductName, slot.GroupId)
+	for {
+		groupServer, err = models.GetGroup(top.zkConn, top.ProductName, slot.GroupId)
+		if err == nil || top.IsFatalErr(err) {
+			break
+		} else {
+			time.Sleep(ZK_RECONNECT_INTERVAL * time.Second)
+		}
+		if err != nil {
+			log.ErrorErrorf(err, " GetGroup ")
+		}
+	}
 	if err != nil {
 		return nil, nil, errors.Trace(err)
 	}
-
 	return slot, groupServer, nil
 }
 
 func NewTopo(ProductName string, zkAddr string, f ZkFactory, provider string, zkSessionTimeout int) *Topology {
-	t := &Topology{zkAddr: zkAddr, ProductName: ProductName, fact: f, provider: provider, zkSessionTimeout: zkSessionTimeout}
+	return NewTopoWithNetConf(ProductName, zkAddr, f, provider, 10, 30, zkSessionTimeout)
+}
+
+func NewTopoWithNetConf(ProductName string, zkAddr string, f ZkFactory, provider string, connTimeout int, readTimeout int, zkSessionTimeout int) *Topology {
+	t := &Topology{zkAddr: zkAddr, ProductName: ProductName, fact: f, provider: provider, zkSessionTimeout: zkSessionTimeout, readTimeout: readTimeout, connTimeout: connTimeout}
 	if t.fact == nil {
 		switch t.provider {
 		case "etcd":
-			t.fact = zkhelper.NewEtcdConn
+			t.fact = &zkhelper.EtcdConnector{}
 		case "zookeeper":
-			t.fact = zkhelper.ConnectToZk
+			t.fact = &zkhelper.ZkConnector{}
 		default:
 			log.Panicf("coordinator not found in config")
 		}
@@ -71,18 +135,50 @@ func NewTopo(ProductName string, zkAddr string, f ZkFactory, provider string, zk
 
 func (top *Topology) InitZkConn() {
 	var err error
-	top.zkConn, err = top.fact(top.zkAddr, top.zkSessionTimeout)
-	if err != nil {
-		log.PanicErrorf(err, "init failed")
+	for {
+		netConf := zkhelper.NetConf{top.readTimeout, top.connTimeout, top.zkSessionTimeout}
+		top.zkConn, err = top.fact.ConnectWithConf(top.zkAddr, netConf)
+		if err != nil {
+			log.ErrorErrorf(err, "init failed")
+			time.Sleep(5 * time.Second)
+		} else {
+			break
+		}
 	}
 }
 
 func (top *Topology) GetActionWithSeq(seq int64) (*models.Action, error) {
-	return models.GetActionWithSeq(top.zkConn, top.ProductName, seq, top.provider)
+	var err error
+	var act *models.Action
+	for {
+		act, err = models.GetActionWithSeq(top.zkConn, top.ProductName, seq, top.provider)
+		if err == nil || top.IsFatalErr(err) {
+			break
+		} else {
+			time.Sleep(ZK_RECONNECT_INTERVAL * time.Second)
+		}
+		if err != nil {
+			log.ErrorErrorf(err, " GetActionWithSeq ")
+			act = nil
+		}
+	}
+	return act, err
 }
 
 func (top *Topology) GetActionWithSeqObject(seq int64, act *models.Action) error {
-	return models.GetActionObject(top.zkConn, top.ProductName, seq, act, top.provider)
+	var err error
+	for {
+		err = models.GetActionObject(top.zkConn, top.ProductName, seq, act, top.provider)
+		if err == nil || top.IsFatalErr(err) {
+			break
+		} else {
+			time.Sleep(ZK_RECONNECT_INTERVAL * time.Second)
+		}
+		if err != nil {
+			log.ErrorErrorf(err, " GetActionWithSeqObject ")
+		}
+	}
+	return err
 }
 
 func (top *Topology) GetActionSeqList(productName string) ([]int, error) {
@@ -102,7 +198,21 @@ func (top *Topology) CreateProxyFenceNode(pi *models.ProxyInfo) (string, error) 
 }
 
 func (top *Topology) GetProxyInfo(proxyName string) (*models.ProxyInfo, error) {
-	return models.GetProxyInfo(top.zkConn, top.ProductName, proxyName)
+	var err error
+	var proxy *models.ProxyInfo
+	for {
+		proxy, err = models.GetProxyInfo(top.zkConn, top.ProductName, proxyName)
+		if err == nil || top.IsFatalErr(err) {
+			break
+		} else {
+			time.Sleep(ZK_RECONNECT_INTERVAL * time.Second)
+		}
+		if err != nil {
+			log.ErrorErrorf(err, "GetProxyInfo ")
+			proxy = nil
+		}
+	}
+	return proxy, err
 }
 
 func (top *Topology) GetActionResponsePath(seq int) string {
@@ -118,9 +228,11 @@ func (top *Topology) Close(proxyName string) {
 	pi, err := models.GetProxyInfo(top.zkConn, top.ProductName, proxyName)
 	if err != nil {
 		log.Errorf("killing fence error, proxy %s is not exists", proxyName)
-	} else {
+	}
+	if pi != nil {
 		zkhelper.DeleteRecursive(top.zkConn, path.Join(models.GetProxyFencePath(top.ProductName), pi.Addr), -1)
 	}
+
 	// delete ephemeral znode
 	zkhelper.DeleteRecursive(top.zkConn, path.Join(models.GetProxyPath(top.ProductName), proxyName), -1)
 	top.zkConn.Close()
@@ -144,7 +256,7 @@ func (top *Topology) DoResponse(seq int, pi *models.ProxyInfo) error {
 func (top *Topology) doWatch(evtch <-chan topo.Event, evtbus chan interface{}) {
 	e := <-evtch
 	if e.State == topo.StateExpired || e.Type == topo.EventNotWatching {
-		log.Panicf("session expired: %+v", e)
+		log.Errorf("session expired: %+v", e)
 	}
 
 	log.Warnf("topo event %+v", e)
@@ -179,4 +291,41 @@ func (top *Topology) WatchNode(path string, evtbus chan interface{}) ([]byte, er
 
 	go top.doWatch(evtch, evtbus)
 	return content, nil
+}
+
+func (top *Topology) RefreshZkConn() {
+	top.zkConn.Close()
+	top.InitZkConn()
+}
+
+func (top *Topology) IsFatalErr(err error) bool {
+	return zkhelper.ZkErrorEqual(err, topo.ErrSessionExpired) || zkhelper.ZkErrorEqual(err, topo.ErrNoNode) || top.IsErrClosing(err)
+}
+
+func (top *Topology) IsErrSessionExpired(err error) bool {
+	return zkhelper.ZkErrorEqual(err, topo.ErrSessionExpired)
+}
+
+func (top *Topology) IsErrNoNode(err error) bool {
+	return zkhelper.ZkErrorEqual(err, topo.ErrNoNode)
+}
+
+func (top *Topology) IsErrClose(err error) bool {
+	return zkhelper.ZkErrorEqual(err, topo.ErrClosing) || zkhelper.ZkErrorEqual(err, topo.ErrConnectionClosed) || zkhelper.ZkErrorEqual(err, topo.ErrNoServer)
+}
+
+func (top *Topology) IsErrClosing(err error) bool {
+	return zkhelper.ZkErrorEqual(err, topo.ErrClosing)
+}
+
+func (top *Topology) IsSessionExpiredEvent(e interface{}) bool {
+	return e.(topo.Event).State == topo.StateExpired || e.(topo.Event).Type == topo.EventNotWatching
+}
+
+func (top *Topology) IsNodeDeletedEvent(e interface{}) bool {
+	return e.(topo.Event).Type == topo.EventNodeDeleted
+}
+
+func (top *Topology) IsErrNodeExist(err error) bool {
+	return zkhelper.ZkErrorEqual(err, topo.ErrNodeExists)
 }

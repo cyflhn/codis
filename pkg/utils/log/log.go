@@ -95,6 +95,8 @@ type Logger struct {
 
 var StdLog = New(NopCloser(os.Stderr), "")
 
+var InfoLog = New(NopCloser(os.Stderr), "")
+
 func New(writer io.Writer, prefix string) *Logger {
 	out, ok := writer.(io.WriteCloser)
 	if !ok {
@@ -399,12 +401,20 @@ func SetFlags(flags int) {
 	StdLog.log.SetFlags(flags)
 }
 
+func SetInfoLogFlags(flags int) {
+	InfoLog.log.SetFlags(flags)
+}
+
 func SetPrefix(prefix string) {
 	StdLog.log.SetPrefix(prefix)
 }
 
 func SetLevel(v LogLevel) {
 	StdLog.level.Set(v)
+}
+
+func SetInfoLogLevel(v LogLevel) {
+	InfoLog.level.Set(v)
 }
 
 func SetTrace(v LogLevel) {
@@ -596,4 +606,31 @@ func Printf(format string, v ...interface{}) {
 func Println(v ...interface{}) {
 	s := fmt.Sprintln(v...)
 	StdLog.output(1, nil, 0, s)
+}
+
+func InfoLogDebug(format string, v ...interface{}) {
+	t := TYPE_DEBUG
+	if InfoLog.isDisabled(t) {
+		return
+	}
+	s := fmt.Sprintf(format, v...)
+	InfoLog.output(1, nil, t, s)
+}
+
+func InfoLogInfo(format string, v ...interface{}) {
+	t := TYPE_INFO
+	if InfoLog.isDisabled(t) {
+		return
+	}
+	s := fmt.Sprintf(format, v...)
+	InfoLog.output(1, nil, t, s)
+}
+
+func InfoLogWarn(format string, v ...interface{}) {
+	t := TYPE_WARN
+	if InfoLog.isDisabled(t) {
+		return
+	}
+	s := fmt.Sprintf(format, v...)
+	InfoLog.output(1, nil, t, s)
 }

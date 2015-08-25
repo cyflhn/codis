@@ -134,6 +134,7 @@ func createDashboardNode() error {
 	// make sure we're the only one dashboard
 	if exists, _, _ := safeZkConn.Exists(zkPath); exists {
 		data, _, _ := safeZkConn.Get(zkPath)
+		createdDashboardNode = true
 		return errors.New("dashboard already exists: " + string(data))
 	}
 
@@ -217,11 +218,15 @@ func runDashboard(addr string, httpLogFile string) {
 	m.Get("/api/action/gc", apiActionGC)
 	m.Get("/api/force_remove_locks", apiForceRemoveLocks)
 	m.Get("/api/remove_fence", apiRemoveFence)
+	m.Get("/api/action/gc", apiActionGC)
 
 	m.Get("/slots", pageSlots)
 	m.Get("/", func(r render.Render) {
 		r.Redirect("/admin")
 	})
+	//check key slot correspondence
+	m.Get("/api/keyslot/(?P<key>.+)", apiKeySlot)
+	m.Get("/api/remove_migration", apiRemoveMigration)
 	zkBuilder := utils.NewConnBuilder(globalEnv.NewZkConn)
 	safeZkConn = zkBuilder.GetSafeConn()
 	unsafeZkConn = zkBuilder.GetUnsafeConn()
@@ -246,6 +251,16 @@ func runDashboard(addr string, httpLogFile string) {
 				qps = 0
 			}
 			atomic.StoreInt64(&proxiesSpeed, qps)
+		}
+	}()
+
+	go func() {
+		for {
+			err := models.ActionGC(safeZkConn, globalEnv.ProductName(), models.GC_TYPE_SEC, 60*60*36)
+			if err != nil {
+				log.Warnf("clean actions failed %+v", err)
+			}
+			time.Sleep(60 * 60 * 24 * time.Second)
 		}
 	}()
 

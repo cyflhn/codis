@@ -78,6 +78,30 @@ func getOpStr(resp *redis.Resp) (string, error) {
 	return string(upper[:len(op)]), nil
 }
 
+func getOpKeyStr(resp *redis.Resp) (string, error) {
+	if !resp.IsArray() || len(resp.Array) == 0 {
+		return "", ErrBadRespType
+	}
+	for _, r := range resp.Array {
+		if r.IsBulkBytes() {
+			continue
+		}
+		return "", ErrBadRespType
+	}
+
+	var upper [64]byte
+
+	var op = resp.Array[0].Value
+	var keys [64]byte
+	if len(resp.Array) > 1 {
+		keys = resp.Array[1].Value
+	}
+	if len(op) == 0 || len(op) > len(upper) {
+		return "", ErrBadOpStrLen
+	}
+	return string(op) + " " + string(keys), nil
+}
+
 func hashSlot(key []byte) int {
 	const (
 		TagBeg = '{'

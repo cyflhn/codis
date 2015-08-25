@@ -106,6 +106,14 @@ func (m *MigrateManager) Tasks() []MigrateTaskInfo {
 	return res
 }
 
+func (m *MigrateManager) RemoveMigrations() error {
+	tasks, _, _ := safeZkConn.Children(getMigrateTasksPath(m.productName))
+	for _, id := range tasks {
+		zkhelper.DeleteRecursive(safeZkConn, getMigrateTasksPath(m.productName)+"/"+id, -1)
+	}
+	return nil
+}
+
 type Tasks []MigrateTaskInfo
 
 func (t Tasks) Len() int {

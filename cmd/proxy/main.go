@@ -33,7 +33,7 @@ var (
 	configFile = "config.ini"
 )
 
-var usage = `usage: proxy [-c <config_file>] [-L <log_file>] [-IL <log_file>] [--log-level=<loglevel>] [--log-filesize=<filesize>] [--cpu=<cpu_num>] [--addr=<proxy_listen_addr>] [--http-addr=<debug_http_server_addr>]
+var usage = `usage: proxy [-c <config_file>] [-L <log_file>] [--infoLog=<info_log_file>] [--log-level=<loglevel>] [--log-filesize=<filesize>] [--cpu=<cpu_num>] [--addr=<proxy_listen_addr>] [--http-addr=<debug_http_server_addr>]
 
 options:
    -c	set config file
@@ -144,7 +144,7 @@ func main() {
 	log.SetFlags(log.Flags() | log.Lshortfile)
 
 	// set info log file
-	if s, ok := args["-IL"].(string); ok && s != "" {
+	if s, ok := args["--infoLog"].(string); ok && s != "" {
 		//f, err := log.NewRollingFile(s, maxFileFrag, maxFragSize)
 		f, err := log.GetLogFile(s)
 		if err != nil {
