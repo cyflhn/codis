@@ -24,6 +24,8 @@ type Config struct {
 	maxBufSize       int
 	maxPipeline      int
 	zkSessionTimeout int
+	zkReadTimeout    int
+	zkConnectTimeout int
 }
 
 func LoadConf(configFile string) (*Config, error) {
@@ -65,5 +67,7 @@ func LoadConf(configFile string) (*Config, error) {
 	conf.maxBufSize = loadConfInt("session_max_bufsize", 131072)
 	conf.maxPipeline = loadConfInt("session_max_pipeline", 1024)
 	conf.zkSessionTimeout = loadConfInt("zk_session_timeout", 30)
+	conf.zkConnectTimeout = loadConfInt("zk_connect_timeout", 10)
+	conf.zkReadTimeout = loadConfInt("zk_read_timeout", 30)
 	return conf, nil
 }

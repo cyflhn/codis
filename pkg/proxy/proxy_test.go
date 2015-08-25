@@ -15,6 +15,13 @@ import (
 
 	"github.com/wandoulabs/codis/pkg/models"
 	"github.com/wandoulabs/codis/pkg/utils/assert"
+	"github.com/wandoulabs/codis/pkg/utils/errors"
+	"github.com/wandoulabs/codis/pkg/utils/log"
+	"net/http"
+	_ "net/http/pprof"
+	"os"
+	"os/signal"
+	"syscall"
 )
 
 var (
@@ -25,14 +32,99 @@ var (
 	redis2 *miniredis.Miniredis
 )
 
+func initReal() {
+	conn = zkhelper.NewConn()
+	conf = &Config{
+		proxyId:          "proxy_test",
+		productName:      "test",
+		zkAddr:           "192.168.28.191:2181",
+		fact:             nil,
+		proto:            "tcp4",
+		provider:         "zookeeper",
+		zkSessionTimeout: 30,
+		zkReadTimeout:    30,
+	}
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT, os.Kill)
+	go func() {
+		<-c
+		log.Info("ctrl-c or SIGTERM found, bye bye...")
+		s.Close()
+	}()
+	go func() {
+		log.Info(http.ListenAndServe("192.168.28.192:6060", nil))
+	}()
+
+	go func() {
+		time.Sleep(10 * time.Second)
+		zkConn, err := zkhelper.ConnectToZk(conf.zkAddr, 20000)
+		if err != nil {
+			log.Errorf("connect to zk:  %+v", errors.Trace(err))
+		} else {
+			err = models.SetProxyStatus(zkConn, conf.productName, conf.proxyId, models.PROXY_STATE_ONLINE)
+			if err != nil {
+				log.Errorf("set proxy error: %+v", errors.Trace(err))
+			}
+		}
+		zkConn.Close()
+	}()
+
+	go func() {
+		err := http.ListenAndServe("192.168.28.192:11001", nil)
+		log.PanicError(err, "http debug server quit")
+	}()
+
+	s = New("192.168.28.192:19001", "192.168.28.192:11001", conf)
+}
+
+func TestRefreshZkConn(t *testing.T) {
+	initReal()
+	time.Sleep(50 * time.Second)
+	if s != nil {
+		//s.top.RefreshZkConn()
+		pi, err := s.topo.GetProxyInfo(s.info.Id)
+		if err != nil {
+			log.Error(err)
+		} else {
+			log.Infof("get proxy: %+v", pi)
+		}
+
+		log.Info("begin get")
+		/*
+			time.Sleep(15 * time.Second)
+			content, err := s.top.WatchChildren(models.GetWatchActionPath(s.top.ProductName), s.evtbus)
+			if err != nil {
+				log.Error(fmt.Sprintf(errors.ErrorStack(err)+" zk error %+v", s.top.IsFatalErr(err)))
+			} else {
+				log.Infof("watch action: %+v", content)
+			}
+			e := <-s.evtbus
+			log.Infof("event: %+v", e)
+		*/
+
+		for {
+			pi, err = s.topo.GetProxyInfo(s.info.Id)
+			if err != nil {
+				log.Error(err)
+			} else {
+				log.Infof("get proxy: %+v", pi)
+			}
+			time.Sleep(5 * time.Second)
+		}
+	}
+}
+
+/*
 func init() {
 	conn = zkhelper.NewConn()
 	conf = &Config{
 		proxyId:     "proxy_test",
 		productName: "test",
 		zkAddr:      "localhost:2181",
-		fact:        func(string, int) (zkhelper.Conn, error) { return conn, nil },
-		proto:       "tcp4",
+		//fact:        func(string, int) (zkhelper.Conn, error) { return conn, nil },
+		fact:     nil,
+		proto:    "tcp4",
+		provider: "zookeeper",
 	}
 
 	//init action path
@@ -71,7 +163,7 @@ func init() {
 	err = models.SetProxyStatus(conn, conf.productName, conf.proxyId, models.PROXY_STATE_ONLINE)
 	assert.MustNoError(err)
 }
-
+*/
 func TestSingleKeyRedisCmd(t *testing.T) {
 	c, err := redis.Dial("tcp", "localhost:19000")
 	if err != nil {
