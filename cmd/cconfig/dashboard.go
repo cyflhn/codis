@@ -94,7 +94,7 @@ func getAllProxyOps() int64 {
 	for _, p := range proxies {
 		i, err := p.Ops()
 		if err != nil {
-			log.WarnErrorf(err, "get proxy ops failed")
+			log.Warnf("get proxy ops failed %+v", err)
 		}
 		total += i
 	}
@@ -256,7 +256,7 @@ func runDashboard(addr string, httpLogFile string) {
 
 	go func() {
 		for {
-			err := models.ActionGC(safeZkConn, globalEnv.ProductName(), models.GC_TYPE_SEC, 60*60*36)
+			err := models.ActionGC(safeZkConn, globalEnv.ProductName(), models.GC_TYPE_SEC, 60*60*24)
 			if err != nil {
 				log.Warnf("clean actions failed %+v", err)
 			}
@@ -265,5 +265,4 @@ func runDashboard(addr string, httpLogFile string) {
 	}()
 
 	m.RunOnAddr(addr)
-	//log.Warn("3")
 }

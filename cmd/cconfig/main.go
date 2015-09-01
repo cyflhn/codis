@@ -36,7 +36,7 @@ type Command struct {
 	Ctx   interface{}
 }
 
-var usage = `usage: codis-config  [-c <config_file>] [-L <log_file>] [--log-level=<loglevel>]
+var usage = `usage: codis-config  [-c <config_file>] [-L <log_file>] [--log-level=<loglevel>] [--dport=<debugport>]
 		<command> [<args>...]
 options:
    -c	set config file
@@ -147,7 +147,10 @@ func main() {
 	cmd := args["<command>"].(string)
 	cmdArgs := args["<args>"].([]string)
 
-	go http.ListenAndServe(":10086", nil)
+	if s, ok := args["--dport"].(string); ok && s != "" {
+		go http.ListenAndServe(":"+s, nil)
+	}
+
 	err = runCommand(cmd, cmdArgs)
 	if err != nil {
 		log.PanicErrorf(err, "run sub-command failed")
