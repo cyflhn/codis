@@ -218,8 +218,7 @@ func runDashboard(addr string, httpLogFile string) {
 	m.Get("/api/action/gc", apiActionGC)
 	m.Get("/api/force_remove_locks", apiForceRemoveLocks)
 	m.Get("/api/remove_fence", apiRemoveFence)
-	m.Get("/api/action/gc", apiActionGC)
-
+	//m.Get("/api/action/gc", apiActionGC)
 	m.Get("/slots", pageSlots)
 	m.Get("/", func(r render.Render) {
 		r.Redirect("/admin")

@@ -90,7 +90,7 @@ func WaitForReceiverWithTimeout(zkConn zkhelper.Conn, productName string, action
 		proxyIds[p.Id] = true
 	}
 	// check every 500ms
-	for times < timeoutInMs/500{
+	for times < timeoutInMs/500 {
 		if times >= 6 && (times*500)%1000 == 0 {
 			log.Warnf("abnormal waiting time for receivers: %s %v", actionZkPath, proxyIds)
 		}
@@ -111,12 +111,14 @@ func WaitForReceiverWithTimeout(zkConn zkhelper.Conn, productName string, action
 	}
 	log.Warn("proxies didn't responed: ", proxyIds)
 	// set offline proxies
-	for id, _ := range proxyIds {
-		log.Errorf("mark proxy %s to PROXY_STATE_MARK_OFFLINE", id)
-		if err := SetProxyStatus(zkConn, productName, id, PROXY_STATE_MARK_OFFLINE); err != nil {
-			return errors.Trace(err)
+	/*
+		for id, _ := range proxyIds {
+			log.Errorf("mark proxy %s to PROXY_STATE_MARK_OFFLINE", id)
+			if err := SetProxyStatus(zkConn, productName, id, PROXY_STATE_MARK_OFFLINE); err != nil {
+				return errors.Trace(err)
+			}
 		}
-	}
+	*/
 	return ErrReceiverTimeout
 }
 
@@ -196,6 +198,29 @@ func ActionGC(zkConn zkhelper.Conn, productName string, gcType int, keep int) er
 				}
 				err := zkhelper.DeleteRecursive(zkConn, path.Join(respPrefix, action), -1)
 				if err != nil && !zkhelper.ZkErrorEqual(err, zk.ErrNoNode) {
+					return errors.Trace(err)
+				}
+			}
+		}
+
+		actionResps, _, err := zkConn.Children(respPrefix)
+		if err != nil {
+			return errors.Trace(err)
+		}
+
+		for _, action := range actionResps {
+			b, _, err := zkConn.Get(path.Join(respPrefix, action))
+			if err != nil {
+				return errors.Trace(err)
+			}
+			if err := json.Unmarshal(b, &act); err != nil {
+				return errors.Trace(err)
+			}
+			log.Infof("action = %s, timestamp = %s", action, act.Ts)
+			ts, _ := strconv.ParseInt(act.Ts, 10, 64)
+
+			if currentTs-ts > int64(secs) {
+				if err := zkhelper.DeleteRecursive(zkConn, path.Join(respPrefix, action), -1); err != nil {
 					return errors.Trace(err)
 				}
 			}
