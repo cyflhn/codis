@@ -92,7 +92,7 @@ func getOpKeyStr(resp *redis.Resp) (string, error) {
 	var upper [64]byte
 
 	var op = resp.Array[0].Value
-	var keys [64]byte
+	var keys []byte
 	if len(resp.Array) > 1 {
 		keys = resp.Array[1].Value
 	}
@@ -113,6 +113,10 @@ func hashSlot(key []byte) int {
 		}
 	}
 	return int(crc32.ChecksumIEEE(key) % MaxSlotNum)
+}
+
+func GetHashSlot(key []byte) int {
+	return hashSlot(key)
 }
 
 func getHashKey(resp *redis.Resp, opstr string) []byte {

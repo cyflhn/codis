@@ -152,7 +152,13 @@ func (s *Session) handleResponse(r *Request) (*redis.Resp, error) {
 		return nil, ErrRespIsRequired
 	}
 	incrOpStats(r.OpStr, microseconds()-r.Start)
-	log.InfoLogInfo("invoke %s time %d ", getOpKeyStr(r.Resp), miliseconds(microseconds()-r.Start))
+	key, _ := getOpKeyStr(r.Resp)
+	nowtime := microseconds()
+	log.InfoLogDebug("invoke %s time %d ", key, nowtime-r.Start)
+	//log.InfoLogInfo("invoke %s time %d ", key, miliseconds(microseconds()-r.Start))
+	if miliseconds(microseconds()-r.Start) > 500*1 {
+		log.InfoLogWarn("invoke too long %s time %d ", key, nowtime-r.Start)
+	}
 	return resp, nil
 }
 
@@ -395,5 +401,5 @@ func microseconds() int64 {
 }
 
 func miliseconds(microtime int64) int64 {
-	return microtime / int64(time.Millisecond)
+	return microtime * int64(time.Microsecond) / int64(time.Millisecond)
 }

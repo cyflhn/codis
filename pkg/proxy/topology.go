@@ -10,6 +10,7 @@ import (
 	topo "github.com/wandoulabs/go-zookeeper/zk"
 
 	"github.com/wandoulabs/codis/pkg/models"
+	"github.com/wandoulabs/codis/pkg/utils/atomic2"
 	"github.com/wandoulabs/codis/pkg/utils/errors"
 	"github.com/wandoulabs/codis/pkg/utils/log"
 	"github.com/wandoulabs/zkhelper"
@@ -29,7 +30,7 @@ type TopoUpdate interface {
 
 type ZkFactory interface {
 	Connect(Addr string, SessionTimeout int) (zkhelper.Conn, error)
-	ConnectWithConf(Addr string, conf zkhelper.NetConf) (zkhelper.Conn, error)
+	ConnectWithConf(Addr string, conf topo.ConnConf) (zkhelper.Conn, error)
 }
 
 type Topology struct {
@@ -41,6 +42,7 @@ type Topology struct {
 	zkSessionTimeout int
 	readTimeout      int
 	connTimeout      int
+	watchSuspend     *atomic2.Bool
 }
 
 func (top *Topology) GetGroup(groupId int) (*models.ServerGroup, error) {
@@ -118,7 +120,17 @@ func NewTopo(ProductName string, zkAddr string, f ZkFactory, provider string, zk
 }
 
 func NewTopoWithNetConf(ProductName string, zkAddr string, f ZkFactory, provider string, connTimeout int, readTimeout int, zkSessionTimeout int) *Topology {
-	t := &Topology{zkAddr: zkAddr, ProductName: ProductName, fact: f, provider: provider, zkSessionTimeout: zkSessionTimeout, readTimeout: readTimeout, connTimeout: connTimeout}
+	t := &Topology{
+		zkAddr:           zkAddr,
+		ProductName:      ProductName,
+		fact:             f,
+		provider:         provider,
+		zkSessionTimeout: zkSessionTimeout,
+		readTimeout:      readTimeout,
+		connTimeout:      connTimeout,
+		watchSuspend:     &atomic2.Bool{},
+	}
+	t.watchSuspend.Set(false)
 	if t.fact == nil {
 		switch t.provider {
 		case "etcd":
@@ -136,8 +148,8 @@ func NewTopoWithNetConf(ProductName string, zkAddr string, f ZkFactory, provider
 func (top *Topology) InitZkConn() {
 	var err error
 	for {
-		netConf := zkhelper.NetConf{top.readTimeout, top.connTimeout, top.zkSessionTimeout}
-		top.zkConn, err = top.fact.ConnectWithConf(top.zkAddr, netConf)
+		connConf := topo.ConnConf{time.Duration(top.readTimeout) * time.Second, time.Duration(top.connTimeout) * time.Second, int32(top.zkSessionTimeout * 1000)}
+		top.zkConn, err = top.fact.ConnectWithConf(top.zkAddr, connConf)
 		if err != nil {
 			log.ErrorErrorf(err, "init failed")
 			time.Sleep(5 * time.Second)
@@ -255,22 +267,18 @@ func (top *Topology) DoResponse(seq int, pi *models.ProxyInfo) error {
 
 func (top *Topology) doWatch(evtch <-chan topo.Event, evtbus chan interface{}) {
 	e := <-evtch
-	if e.State == topo.StateExpired || e.Type == topo.EventNotWatching {
-		log.Errorf("session expired: %+v", e)
-	}
-
 	log.Warnf("topo event %+v", e)
-
 	switch e.Type {
 	//case topo.EventNodeCreated:
 	//case topo.EventNodeDataChanged:
 	case topo.EventNodeChildrenChanged: //only care children changed
 		//todo:get changed node and decode event
 	default:
-		log.Warnf("%+v", e)
+		//log.Warnf("%+v", e)
 	}
-
-	evtbus <- e
+	if top.watchSuspend.Get() == false {
+		evtbus <- e
+	}
 }
 
 func (top *Topology) WatchChildren(path string, evtbus chan interface{}) ([]string, error) {

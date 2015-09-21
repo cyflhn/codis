@@ -26,6 +26,7 @@ type Config struct {
 	zkSessionTimeout int
 	zkReadTimeout    int
 	zkConnectTimeout int
+	dashboardAddr    string
 }
 
 func LoadConf(configFile string) (*Config, error) {
@@ -49,6 +50,11 @@ func LoadConf(configFile string) (*Config, error) {
 	conf.proxyId, _ = c.ReadString("proxy_id", "")
 	if len(conf.proxyId) == 0 {
 		log.Panicf("invalid config: need proxy_id entry is missing in %s", configFile)
+	}
+
+	conf.dashboardAddr, _ = c.ReadString("dashboard_addr", "")
+	if conf.dashboardAddr == "" {
+		log.Panicf("invalid config: dashboard_addr is missing in %s", configFile)
 	}
 
 	conf.proto, _ = c.ReadString("proto", "tcp")

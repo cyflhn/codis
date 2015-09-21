@@ -160,10 +160,10 @@ func (s *Router) fillSlot(i int, addr, from string, lock bool) {
 	}
 
 	if slot.migrate.bc != nil {
-		log.Infof("fill slot %04d, backend.addr = %s, migrate.from = %s",
+		log.Debugf("fill slot %04d, backend.addr = %s, migrate.from = %s",
 			i, slot.backend.addr, slot.migrate.from)
 	} else {
-		log.Infof("fill slot %04d, backend.addr = %s",
+		log.Debugf("fill slot %04d, backend.addr = %s",
 			i, slot.backend.addr)
 	}
 }

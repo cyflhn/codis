@@ -35,6 +35,7 @@ type ProxyInfo struct {
 }
 
 func (p *ProxyInfo) Ops() (int64, error) {
+	/* we do not need such a function*/
 	resp, err := http.Get("http://" + p.DebugVarAddr + "/debug/vars")
 	if err != nil {
 		return -1, errors.Trace(err)
@@ -57,7 +58,6 @@ func (p *ProxyInfo) Ops() (int64, error) {
 			return int64(vv.(float64)), nil
 		}
 	}
-
 	return 0, nil
 }
 
@@ -160,7 +160,7 @@ func SetProxyStatus(zkConn zkhelper.Conn, productName string, proxyName string, 
 			return errors.Trace(err)
 		}
 		for _, slot := range slots {
-			if slot.State.Status != SLOT_STATUS_ONLINE {
+			if slot.State.Status == PROXY_STATE_MARK_OFFLINE {
 				return errors.Errorf("slot %v is not online", slot)
 			}
 			if slot.GroupId == INVALID_ID {

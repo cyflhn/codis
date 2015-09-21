@@ -24,6 +24,7 @@ import (
 	"github.com/wandoulabs/codis/pkg/utils"
 	_ "github.com/wandoulabs/codis/pkg/utils/bytesize"
 	"github.com/wandoulabs/codis/pkg/utils/log"
+	"time"
 )
 
 var (
@@ -217,6 +218,10 @@ func main() {
 		s.Close()
 	}()
 
+	time.Sleep(time.Second)
+	if err := s.SetMyselfOnline(); err != nil {
+		log.WarnError(err, "mark myself online fail, you need mark online manually by dashboard")
+	}
 	s.Join()
 	log.Infof("proxy exit!! :(")
 }

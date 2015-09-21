@@ -4,20 +4,21 @@
 package proxy
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"github.com/wandoulabs/codis/pkg/models"
+	"github.com/wandoulabs/codis/pkg/proxy/router"
+	"github.com/wandoulabs/codis/pkg/utils/log"
+	topo "github.com/wandoulabs/go-zookeeper/zk"
 	"net"
+	"net/http"
 	"os"
 	"path"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	topo "github.com/wandoulabs/go-zookeeper/zk"
-
-	"github.com/wandoulabs/codis/pkg/models"
-	"github.com/wandoulabs/codis/pkg/proxy/router"
-	"github.com/wandoulabs/codis/pkg/utils/log"
 )
 
 const (
@@ -92,6 +93,24 @@ func New(addr string, debugVarAddr string, conf *Config) *Server {
 	return s
 }
 
+func (s *Server) SetMyselfOnline() error {
+	log.Info("mark myself online")
+	info := models.ProxyInfo{
+		Id:    s.conf.proxyId,
+		State: models.PROXY_STATE_ONLINE,
+	}
+	b, _ := json.Marshal(info)
+	url := "http://" + s.conf.dashboardAddr + "/api/proxy"
+	res, err := http.Post(url, "application/json", bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	if res.StatusCode != 200 {
+		return errors.New("response code is not 200")
+	}
+	return nil
+}
+
 func (s *Server) serve() {
 	defer s.close()
 
@@ -127,24 +146,27 @@ func (s *Server) handleConns() {
 		if err != nil {
 			return
 		} else {
-			if s.status == SERVER_STATUS_STARTING {
-				s.listener.Close()
-				for {
-					if s.status == SERVER_STATUS_STARTED {
-						if l, err := net.Listen("tcp", ":"+strings.Split(s.info.Addr, ":")[1]); err != nil {
-							log.ErrorErrorf(err, "open listener failed")
-							time.Sleep(5 * time.Second)
+			/*
+				if s.status == SERVER_STATUS_STARTING {
+					s.listener.Close()
+					for {
+						if s.status == SERVER_STATUS_STARTED {
+							if l, err := net.Listen("tcp", ":"+strings.Split(s.info.Addr, ":")[1]); err != nil {
+								log.ErrorErrorf(err, "open listener failed")
+								time.Sleep(5 * time.Second)
+							} else {
+								s.listener = l
+								break
+							}
 						} else {
-							s.listener = l
-							break
+							time.Sleep(5 * time.Second)
 						}
-					} else {
-						time.Sleep(5 * time.Second)
 					}
+				} else {
+					ch <- c
 				}
-			} else {
-				ch <- c
-			}
+			*/
+			ch <- c
 		}
 	}
 }
@@ -317,6 +339,10 @@ func (s *Server) resetSlot(i int) {
 	s.router.ResetSlot(i)
 }
 
+/*
+* return err should be reconnect to zk
+*
+ */
 func (s *Server) fillSlot(i int) error {
 	slotInfo, slotGroup, err := s.topo.GetSlotByIndex(i)
 	if err != nil {
@@ -351,7 +377,7 @@ func (s *Server) fillSlot(i int) error {
 	return err
 }
 
-func (s *Server) onSlotRangeChange(param *models.SlotMultiSetParam) {
+func (s *Server) onSlotRangeChange(param *models.SlotMultiSetParam) error {
 	log.Infof("slotRangeChange %+v", param)
 	for i := param.From; i <= param.To; i++ {
 		switch param.Status {
@@ -359,25 +385,27 @@ func (s *Server) onSlotRangeChange(param *models.SlotMultiSetParam) {
 			s.resetSlot(i)
 		case models.SLOT_STATUS_ONLINE:
 			if err := s.fillSlot(i); err != nil {
-				s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
-				break
+				//s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
+				return err
 			}
 		default:
 			log.Errorf("can not handle status %v", param.Status)
 		}
 	}
+	return nil
 }
 
-func (s *Server) onGroupChange(groupId int) {
+func (s *Server) onGroupChange(groupId int) error {
 	log.Infof("group changed %d", groupId)
 	for i, g := range s.groups {
 		if g == groupId {
 			if err := s.fillSlot(i); err != nil {
-				s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
-				break
+				//s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
+				return err
 			}
 		}
 	}
+	return nil
 }
 
 func (s *Server) responseAction(seq int64) {
@@ -401,7 +429,7 @@ func (s *Server) getActionObject(seq int, target interface{}) error {
 func (s *Server) checkAndDoTopoChange(seq int) bool {
 	act, err := s.topo.GetActionWithSeq(int64(seq))
 	if err != nil {
-		s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
+		//s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
 		return false
 	}
 	if !needResponse(act.Receivers, s.info) { //no need to response
@@ -417,13 +445,18 @@ func (s *Server) checkAndDoTopoChange(seq int) bool {
 		if err := s.getActionObject(seq, slot); err != nil {
 			return false
 		}
-		s.fillSlot(slot.Id)
+		if err := s.fillSlot(slot.Id); err != nil {
+			//s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
+			return false
+		}
 	case models.ACTION_TYPE_SERVER_GROUP_CHANGED:
 		serverGroup := &models.ServerGroup{}
 		if err := s.getActionObject(seq, serverGroup); err != nil {
 			return false
 		}
-		s.onGroupChange(serverGroup.Id)
+		if err := s.onGroupChange(serverGroup.Id); err != nil {
+			return false
+		}
 	case models.ACTION_TYPE_SERVER_GROUP_REMOVE:
 	//do not care
 	case models.ACTION_TYPE_MULTI_SLOT_CHANGED:
@@ -431,24 +464,26 @@ func (s *Server) checkAndDoTopoChange(seq int) bool {
 		if err := s.getActionObject(seq, param); err != nil {
 			return false
 		}
-		s.onSlotRangeChange(param)
+		if err := s.onSlotRangeChange(param); err != nil {
+			return false
+		}
 	default:
 		log.Errorf("unknown action %+v", act)
 	}
 	return true
 }
 
-func (s *Server) processAction(e interface{}) {
+func (s *Server) processAction(e interface{}) error {
 	if s.topo.IsSessionExpiredEvent(e) {
-		s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
-		return
+		//s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
+		return topo.ErrSessionExpired
 	}
 	if strings.Index(getEventPath(e), models.GetProxyPath(s.topo.ProductName)) == 0 {
 		info, err := s.topo.GetProxyInfo(s.info.Id)
 		if err != nil {
 			log.ErrorErrorf(err, "get proxy info failed: %s", s.info.Id)
-			s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
-			return
+			//s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
+			return err
 		}
 		switch info.State {
 		case models.PROXY_STATE_MARK_OFFLINE:
@@ -459,7 +494,7 @@ func (s *Server) processAction(e interface{}) {
 		default:
 			log.Errorf("unknown proxy state %+v", info)
 		}
-		return
+		return nil
 	}
 
 	//re-watch
@@ -468,12 +503,12 @@ func (s *Server) processAction(e interface{}) {
 	seqs, err := models.ExtraSeqList(nodes)
 	if err != nil {
 		log.ErrorErrorf(err, "get seq list failed")
-		s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
-		return
+		//s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
+		return err
 	}
 
 	if len(seqs) == 0 || !s.topo.IsChildrenChangedEvent(e) {
-		return
+		return nil
 	}
 
 	//get last pos
@@ -486,7 +521,7 @@ func (s *Server) processAction(e interface{}) {
 	}
 
 	if index < 0 {
-		return
+		return nil
 	}
 
 	actions := seqs[index:]
@@ -494,8 +529,8 @@ func (s *Server) processAction(e interface{}) {
 		exist, err := s.topo.Exist(path.Join(s.topo.GetActionResponsePath(seq), s.info.Id))
 		if err != nil {
 			log.ErrorErrorf(err, "get action failed")
-			s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
-			return
+			//s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
+			return err
 		}
 		if exist {
 			continue
@@ -506,6 +541,7 @@ func (s *Server) processAction(e interface{}) {
 	}
 
 	s.lastActionSeq = seqs[len(seqs)-1]
+	return nil
 }
 
 func (s *Server) loopEvents() {
@@ -532,7 +568,10 @@ func (s *Server) loopEvents() {
 					}
 				}
 			}
-			s.processAction(e)
+			err := s.processAction(e)
+			if err != nil {
+				s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
+			}
 		case <-ticker.C:
 			if maxTick := s.conf.pingPeriod; maxTick != 0 {
 				if tick++; tick >= maxTick {
@@ -576,13 +615,14 @@ func (s *Server) reRegisterAndReWatchPrxoy(state string) {
 	s.cleanup()
 	s.topo.InitZkConn()
 	s.register()
+	s.topo.watchSuspend.Set(false)
 	s.rewatchProxy()
 	s.setServerStatus(SERVER_STATUS_STARTED)
 }
 
 func (s *Server) reRegisterAndFillSlots(state string) {
 	if s.isStarting() {
-		log.Infof("server is restarting")
+		log.Warnf("server is restarting")
 		return
 	}
 	log.Warnf("server will restart")
@@ -593,8 +633,10 @@ func (s *Server) reRegisterAndFillSlots(state string) {
 	s.register()
 	s.rewatchProxy()
 	s.rewatchNodes()
+	s.topo.watchSuspend.Set(false)
 	s.fillSlots()
 	s.setServerStatus(SERVER_STATUS_STARTED)
+	log.Warnf("server restarted")
 }
 
 func (s *Server) isStarting() bool {
@@ -610,7 +652,8 @@ func (s *Server) setServerStatus(status int) {
 }
 
 func (s *Server) cleanup() {
+	s.topo.watchSuspend.CompareAndSwap(false, true)
 	close(s.evtbus)
-	s.evtbus = make(chan interface{}, 1000)
 	s.topo.Close(s.info.Id)
+	s.evtbus = make(chan interface{}, 1000)
 }
