@@ -446,7 +446,7 @@ func apiGetSlots() (int, string) {
 func apiSlotRangeSet(task RangeSetTask) (int, string) {
 	lock := utils.GetZkLock(safeZkConn, globalEnv.ProductName())
 	if err := lock.LockWithTimeout(0, fmt.Sprintf("set slot range, %+v", task)); err != nil {
-		return 500, err
+		return 500, err.Error()
 	}
 	defer func() {
 		err := lock.Unlock()
