@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"sync"
 
+	"container/list"
 	"github.com/wandoulabs/codis/pkg/utils/atomic2"
 )
 
@@ -14,6 +15,13 @@ type OpStats struct {
 	opstr string
 	calls atomic2.Int64
 	usecs atomic2.Int64
+}
+
+type SlowOpInfo struct {
+	Time     string
+	Duration int64
+	Key      string
+	Reqs     int64
 }
 
 func (s *OpStats) OpStr() string {
@@ -48,12 +56,17 @@ func (s *OpStats) MarshalJSON() ([]byte, error) {
 var cmdstats struct {
 	requests atomic2.Int64
 
-	opmap map[string]*OpStats
-	rwlck sync.RWMutex
+	opmap        map[string]*OpStats
+	rwlck        sync.RWMutex
+	slowOps      *list.List
+	slowoplk     sync.Mutex
+	lastLogUsecs int64
 }
 
 func init() {
 	cmdstats.opmap = make(map[string]*OpStats)
+	cmdstats.slowOps = list.New()
+	cmdstats.lastLogUsecs = 0
 }
 
 func OpCounts() int64 {
@@ -94,4 +107,43 @@ func incrOpStats(opstr string, usecs int64) {
 	s.calls.Incr()
 	s.usecs.Add(usecs)
 	cmdstats.requests.Incr()
+}
+
+func addSlowOps(time string, key string, usecs int64) {
+	s := &SlowOpInfo{
+		Time:     time,
+		Key:      key,
+		Duration: usecs,
+		Reqs:     cmdstats.requests.Get(),
+	}
+	if cmdstats.slowOps.Len() >= 10 {
+		cmdstats.slowoplk.Lock()
+		for {
+			if cmdstats.slowOps.Len() < 10 {
+				break
+			}
+			e := cmdstats.slowOps.Front()
+			cmdstats.slowOps.Remove(e)
+		}
+
+		cmdstats.slowoplk.Unlock()
+	}
+	cmdstats.slowOps.PushBack(s)
+}
+
+func GetSlowOps() []*SlowOpInfo {
+	var all = make([]*SlowOpInfo, 0, 10)
+	for iter := cmdstats.slowOps.Front(); iter != nil; iter = iter.Next() {
+		all = append(all, iter.Value.(*SlowOpInfo))
+	}
+	return all
+}
+
+func (s *SlowOpInfo) MarshalJSON() ([]byte, error) {
+	var m = make(map[string]interface{})
+	m["key"] = s.Key
+	m["duration"] = s.Duration
+	m["time"] = s.Time
+	m["req"] = s.Reqs
+	return json.Marshal(m)
 }

@@ -151,13 +151,17 @@ func (s *Session) handleResponse(r *Request) (*redis.Resp, error) {
 	if resp == nil {
 		return nil, ErrRespIsRequired
 	}
-	incrOpStats(r.OpStr, microseconds()-r.Start)
-	key, _ := getOpKeyStr(r.Resp)
 	nowtime := microseconds()
-	log.InfoLogDebug("invoke %s time %d ", key, nowtime-r.Start)
-	//log.InfoLogInfo("invoke %s time %d ", key, miliseconds(microseconds()-r.Start))
-	if miliseconds(microseconds()-r.Start) > 500*1 {
-		log.InfoLogWarn("invoke too long %s time %d ", key, nowtime-r.Start)
+	cost := nowtime - r.Start
+	incrOpStats(r.OpStr, cost)
+	key, _ := getOpKeyStr(r.Resp)
+	log.InfoLogDebug("invoke %s time %d ", key, cost)
+	if miliseconds(nowtime-r.Start) > 800 {
+		log.InfoLogWarn("invoke too long %s time %d reqs %d", key, cost, OpCounts())
+		addSlowOps(time.Now().Format("2006-01-02 15:04:05"), key, cost)
+	} else if nowtime-cmdstats.lastLogUsecs > 1000*1000*60*60 {
+		log.InfoLogWarn("current reqs %d", OpCounts())
+		cmdstats.lastLogUsecs = nowtime
 	}
 	return resp, nil
 }
