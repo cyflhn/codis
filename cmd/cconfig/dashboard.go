@@ -21,6 +21,7 @@ import (
 	"github.com/wandoulabs/zkhelper"
 
 	"github.com/wandoulabs/codis/pkg/models"
+	router "github.com/wandoulabs/codis/pkg/proxy/router"
 	"github.com/wandoulabs/codis/pkg/utils"
 	"github.com/wandoulabs/codis/pkg/utils/errors"
 	"github.com/wandoulabs/codis/pkg/utils/log"
@@ -116,6 +117,40 @@ func getAllProxyDebugVars() map[string]map[string]interface{} {
 			log.WarnErrorf(err, "get proxy debug varsfailed")
 		}
 		ret[p.Id] = m
+	}
+	return ret
+}
+
+func getAllProxySlowop() map[string][]*router.SlowOpInfo {
+	proxies, err := models.ProxyList(unsafeZkConn, globalEnv.ProductName(), nil)
+	if err != nil {
+		log.ErrorErrorf(err, "get proxy list failed")
+		return nil
+	}
+
+	ret := make(map[string][]*router.SlowOpInfo)
+	for _, p := range proxies {
+		m, err := p.DebugVars()
+		if err != nil {
+			log.WarnErrorf(err, "get proxy debug varsfailed")
+		}
+		if m["router"] != nil {
+			route := m["router"].(map[string]interface{})
+			if route["slowop"] != nil {
+				ops := make([]*router.SlowOpInfo, 0, 10)
+				for _, elem := range route["slowop"].([]interface{}) {
+					op := elem.(map[string]interface{})
+					s := &router.SlowOpInfo{
+						Time:     op["time"].(string),
+						Key:      op["key"].(string),
+						Duration: int64(op["duration"].(float64)),
+						Reqs:     int64(op["req"].(float64)),
+					}
+					ops = append(ops, s)
+				}
+				ret[p.Id] = ops
+			}
+		}
 	}
 	return ret
 }
@@ -226,6 +261,7 @@ func runDashboard(addr string, httpLogFile string) {
 	//check key slot correspondence
 	m.Get("/api/keyslot/(?P<key>.+)", apiKeySlot)
 	m.Get("/api/remove_migration", apiRemoveMigration)
+	m.Get("/api/proxy/slowop", apiGetProxySlowop)
 	zkBuilder := utils.NewConnBuilder(globalEnv.NewZkConn)
 	safeZkConn = zkBuilder.GetSafeConn()
 	unsafeZkConn = zkBuilder.GetUnsafeConn()

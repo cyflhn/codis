@@ -45,6 +45,21 @@ func apiGetProxyDebugVars() (int, string) {
 	return 200, string(b)
 }
 
+func apiGetProxySlowop() (int, string) {
+	m := getAllProxySlowop()
+	if m == nil {
+		return 500, "Error getting proxy debug vars"
+	}
+
+	b, err := json.MarshalIndent(m, " ", "  ")
+	if err != nil {
+		log.WarnErrorf(err, "to json failed")
+		return 500, err.Error()
+	}
+
+	return 200, string(b)
+}
+
 func apiOverview() (int, string) {
 	// get all server groups
 	groups, err := models.ServerGroups(unsafeZkConn, globalEnv.ProductName())

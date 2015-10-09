@@ -208,6 +208,7 @@ func main() {
 			"version": utils.Version,
 			"compile": utils.Compile,
 		}
+		m["slowop"] = router.GetSlowOps()
 		b, _ := json.Marshal(m)
 		return string(b)
 	})
