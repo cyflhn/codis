@@ -5,10 +5,9 @@ package router
 
 import (
 	"encoding/json"
-	"sync"
-
-	"container/list"
 	"github.com/wandoulabs/codis/pkg/utils/atomic2"
+	"sync"
+	"time"
 )
 
 type OpStats struct {
@@ -58,15 +57,34 @@ var cmdstats struct {
 
 	opmap        map[string]*OpStats
 	rwlck        sync.RWMutex
-	slowOps      *list.List
+	slowOps      []*SlowOpInfo
 	slowoplk     sync.Mutex
 	lastLogUsecs int64
 }
 
 func init() {
 	cmdstats.opmap = make(map[string]*OpStats)
-	cmdstats.slowOps = list.New()
+	cmdstats.slowOps = make([]*SlowOpInfo, 0, 20)
 	cmdstats.lastLogUsecs = 0
+	go func() {
+		for {
+			for {
+				slen := len(cmdstats.slowOps)
+				if slen < 10 {
+					break
+				}
+				cmdstats.slowoplk.Lock()
+				if slen < 50 {
+					cmdstats.slowOps = cmdstats.slowOps[1:]
+				} else {
+					cmdstats.slowOps = cmdstats.slowOps[slen-1:]
+				}
+				cmdstats.slowoplk.Unlock()
+
+			}
+			time.Sleep(5 * time.Second)
+		}
+	}()
 }
 
 func OpCounts() int64 {
@@ -116,26 +134,16 @@ func addSlowOps(time string, key string, usecs int64) {
 		Duration: usecs,
 		Reqs:     cmdstats.requests.Get(),
 	}
-	if cmdstats.slowOps.Len() >= 10 {
-		cmdstats.slowoplk.Lock()
-		for {
-			if cmdstats.slowOps.Len() < 10 {
-				break
-			}
-			e := cmdstats.slowOps.Front()
-			cmdstats.slowOps.Remove(e)
-		}
-
-		cmdstats.slowoplk.Unlock()
-	}
-	cmdstats.slowOps.PushBack(s)
+	cmdstats.slowOps = append(cmdstats.slowOps, s)
 }
 
 func GetSlowOps() []*SlowOpInfo {
 	var all = make([]*SlowOpInfo, 0, 10)
-	for iter := cmdstats.slowOps.Front(); iter != nil; iter = iter.Next() {
-		all = append(all, iter.Value.(*SlowOpInfo))
+	cmdstats.slowoplk.Lock()
+	for _, val := range cmdstats.slowOps {
+		all = append(all, val)
 	}
+	cmdstats.slowoplk.Unlock()
 	return all
 }
 
