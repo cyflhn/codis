@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"github.com/wandoulabs/codis/pkg/utils/atomic2"
 	"sync"
-	"time"
+	_ "time"
 )
 
 type OpStats struct {
@@ -66,7 +66,7 @@ func init() {
 	cmdstats.opmap = make(map[string]*OpStats)
 	cmdstats.slowOps = make([]*SlowOpInfo, 0, 20)
 	cmdstats.lastLogUsecs = 0
-	go func() {
+	/*go func() {
 		for {
 			for {
 				slen := len(cmdstats.slowOps)
@@ -84,7 +84,7 @@ func init() {
 			}
 			time.Sleep(5 * time.Second)
 		}
-	}()
+	}()*/
 }
 
 func OpCounts() int64 {
@@ -128,23 +128,25 @@ func incrOpStats(opstr string, usecs int64) {
 }
 
 func addSlowOps(time string, key string, usecs int64) {
-	s := &SlowOpInfo{
-		Time:     time,
-		Key:      key,
-		Duration: usecs,
-		Reqs:     cmdstats.requests.Get(),
-	}
-	cmdstats.slowOps = append(cmdstats.slowOps, s)
+	/*
+		s := &SlowOpInfo{
+			Time:     time,
+			Key:      key,
+			Duration: usecs,
+			Reqs:     cmdstats.requests.Get(),
+		}
+		cmdstats.slowOps = append(cmdstats.slowOps, s)
+	*/
 }
 
 func GetSlowOps() []*SlowOpInfo {
-	var all = make([]*SlowOpInfo, 0, 10)
+	/*var all = make([]*SlowOpInfo, 0, 10)
 	cmdstats.slowoplk.Lock()
 	for _, val := range cmdstats.slowOps {
 		all = append(all, val)
 	}
-	cmdstats.slowoplk.Unlock()
-	return all
+	cmdstats.slowoplk.Unlock()*/
+	return cmdstats.slowOps
 }
 
 func (s *SlowOpInfo) MarshalJSON() ([]byte, error) {

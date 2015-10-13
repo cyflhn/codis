@@ -118,7 +118,7 @@ func (s *Server) serve() {
 		return
 	}
 
-	s.rewatchNodes()
+	s.rewatchNodes(true)
 
 	s.fillSlots()
 
@@ -126,7 +126,7 @@ func (s *Server) serve() {
 		defer s.close()
 		s.handleConns()
 	}()
-
+	s.setServerStatus(SERVER_STATUS_STARTED)
 	s.loopEvents()
 }
 
@@ -195,14 +195,14 @@ func (s *Server) close() {
 	})
 }
 
-func (s *Server) rewatchProxy() {
+func (s *Server) rewatchProxy(invokeFromRestart bool) {
 	var err error
 	for {
 		_, err = s.topo.WatchNode(path.Join(models.GetProxyPath(s.topo.ProductName), s.info.Id), s.evtbus)
 		if err != nil {
 			log.ErrorErrorf(err, "watch node failed")
 			if s.topo.IsFatalErr(err) {
-				s.reRegister(models.PROXY_STATE_ONLINE)
+				s.reRegister(models.PROXY_STATE_ONLINE, invokeFromRestart)
 			} else {
 				time.Sleep(5 * time.Second)
 			}
@@ -212,7 +212,7 @@ func (s *Server) rewatchProxy() {
 	}
 }
 
-func (s *Server) rewatchNodes() []string {
+func (s *Server) rewatchNodes(invokeFromRestart bool) []string {
 	var nodes []string
 	var err error
 	for {
@@ -220,7 +220,12 @@ func (s *Server) rewatchNodes() []string {
 		if err != nil {
 			log.ErrorErrorf(err, "watch children failed")
 			if s.topo.IsFatalErr(err) {
-				s.reRegisterAndReWatchPrxoy(models.PROXY_STATE_ONLINE)
+				if invokeFromRestart == false {
+					s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE, invokeFromRestart)
+				} else {
+					s.reRegisterAndReWatchPrxoy(models.PROXY_STATE_ONLINE, invokeFromRestart)
+				}
+				break
 			} else {
 				time.Sleep(5 * time.Second)
 			}
@@ -271,7 +276,7 @@ func (s *Server) waitOnline() bool {
 		if err != nil {
 			log.ErrorErrorf(err, "get proxy info failed: %s", s.info.Id)
 			if s.topo.IsFatalErr(err) {
-				s.reRegister(models.PROXY_STATE_MARK_OFFLINE)
+				s.reRegister(models.PROXY_STATE_MARK_OFFLINE, true)
 			}
 			continue
 		}
@@ -283,7 +288,7 @@ func (s *Server) waitOnline() bool {
 		case models.PROXY_STATE_ONLINE:
 			s.info.State = info.State
 			log.Infof("we are online: %s", s.info.Id)
-			s.rewatchProxy()
+			s.rewatchProxy(false)
 			return true
 		}
 		select {
@@ -490,7 +495,7 @@ func (s *Server) processAction(e interface{}) error {
 			log.Infof("mark offline, proxy got offline event: %s", s.info.Id)
 			s.markOffline()
 		case models.PROXY_STATE_ONLINE:
-			s.rewatchProxy()
+			s.rewatchProxy(false)
 		default:
 			log.Errorf("unknown proxy state %+v", info)
 		}
@@ -498,7 +503,7 @@ func (s *Server) processAction(e interface{}) error {
 	}
 
 	//re-watch
-	nodes := s.rewatchNodes()
+	nodes := s.rewatchNodes(false)
 
 	seqs, err := models.ExtraSeqList(nodes)
 	if err != nil {
@@ -555,6 +560,9 @@ func (s *Server) loopEvents() {
 			log.Infof("mark offline, proxy is killed: %s", s.info.Id)
 			s.markOffline()
 		case e := <-s.evtbus:
+			if e == nil {
+				continue
+			}
 			evtPath := getEventPath(e)
 			log.Infof("got event %s, %v, lastActionSeq %d", s.info.Id, e, s.lastActionSeq)
 			if strings.Index(evtPath, models.GetActionResponsePath(s.conf.productName)) == 0 {
@@ -570,7 +578,9 @@ func (s *Server) loopEvents() {
 			}
 			err := s.processAction(e)
 			if err != nil {
-				s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
+				go func() {
+					s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE, false)
+				}()
 			}
 		case <-ticker.C:
 			if maxTick := s.conf.pingPeriod; maxTick != 0 {
@@ -583,56 +593,75 @@ func (s *Server) loopEvents() {
 	}
 }
 
-func (s *Server) reRegister(state string) {
-	if s.isStarting() {
-		log.Infof("server is restarting")
+func (s *Server) reRegister(state string, invokeFromRestart bool) {
+	s.startLock.Lock()
+	if s.isStarting() && invokeFromRestart == false {
+		log.Warnf("server is restarting")
+		s.startLock.Unlock()
 		return
 	}
+	s.startLock.Unlock()
 	s.info.State = state
 	s.topo.Close(s.info.Id)
 	s.topo.InitZkConn()
 	s.register()
-	s.setServerStatus(SERVER_STATUS_STARTED)
+	//s.setServerStatus(SERVER_STATUS_STARTED)
 }
 
 func (s *Server) fillSlots() {
-	for i := 0; i < router.MaxSlotNum; i++ {
-		if err := s.fillSlot(i); err != nil {
-			s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
+	for {
+		refill := false
+		for i := 0; i < router.MaxSlotNum; i++ {
+			if err := s.fillSlot(i); err != nil {
+				s.reRegisterAndReWatchPrxoy(models.PROXY_STATE_ONLINE, true)
+				s.rewatchNodes(true)
+				refill = true
+				break
+			}
+		}
+		if refill == false {
 			break
 		}
 	}
+	log.Warnf("fillSlots end")
 }
 
-func (s *Server) reRegisterAndReWatchPrxoy(state string) {
-	if s.isStarting() {
-		log.Infof("server is restarting")
-		return
-	}
-	log.Warnf("server will restart")
-	s.setServerStatus(SERVER_STATUS_STARTING)
-	s.info.State = state
-	s.cleanup()
-	s.topo.InitZkConn()
-	s.register()
-	s.topo.watchSuspend.Set(false)
-	s.rewatchProxy()
-	s.setServerStatus(SERVER_STATUS_STARTED)
-}
-
-func (s *Server) reRegisterAndFillSlots(state string) {
-	if s.isStarting() {
+func (s *Server) reRegisterAndReWatchPrxoy(state string, invokeFromRestart bool) {
+	s.startLock.Lock()
+	if s.isStarting() && invokeFromRestart == false {
 		log.Warnf("server is restarting")
+		s.startLock.Unlock()
 		return
 	}
-	log.Warnf("server will restart")
+	log.Warnf("server will reWatchPrxoy")
 	s.setServerStatus(SERVER_STATUS_STARTING)
+	s.startLock.Unlock()
 	s.info.State = state
 	s.cleanup()
 	s.topo.InitZkConn()
 	s.register()
-	s.rewatchProxy()
-	s.rewatchNodes()
+	s.rewatchProxy(invokeFromRestart)
+	s.topo.watchSuspend.Set(false)
+	log.Warnf("server reWatchPrxoy end")
+	//s.setServerStatus(SERVER_STATUS_STARTED)
+}
+
+func (s *Server) reRegisterAndFillSlots(state string, invokeFromRestart bool) {
+	s.startLock.Lock()
+	if s.isStarting() && invokeFromRestart == false {
+		log.Warnf("server is restarting")
+		s.startLock.Unlock()
+		return
+	}
+	log.Warnf("server will restart status ,%d", s.status)
+	s.setServerStatus(SERVER_STATUS_STARTING)
+	s.startLock.Unlock()
+	s.info.State = state
+	s.cleanup()
+	s.topo.InitZkConn()
+	s.register()
+	s.rewatchProxy(true)
+	s.rewatchNodes(true)
 	s.topo.watchSuspend.Set(false)
 	s.fillSlots()
 	s.setServerStatus(SERVER_STATUS_STARTED)
@@ -640,14 +669,10 @@ func (s *Server) reRegisterAndFillSlots(state string) {
 }
 
 func (s *Server) isStarting() bool {
-	s.startLock.Lock()
-	defer s.startLock.Unlock()
 	return s.status == SERVER_STATUS_STARTING
 }
 
 func (s *Server) setServerStatus(status int) {
-	s.startLock.Lock()
-	defer s.startLock.Unlock()
 	s.status = status
 }
 
