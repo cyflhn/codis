@@ -429,7 +429,6 @@ func (s *Server) getActionObject(seq int, target interface{}) error {
 func (s *Server) checkAndDoTopoChange(seq int) bool {
 	act, err := s.topo.GetActionWithSeq(int64(seq))
 	if err != nil {
-		//s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
 		return false
 	}
 	if !needResponse(act.Receivers, s.info) { //no need to response
@@ -475,14 +474,12 @@ func (s *Server) checkAndDoTopoChange(seq int) bool {
 
 func (s *Server) processAction(e interface{}) error {
 	if s.topo.IsSessionExpiredEvent(e) {
-		//s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
 		return topo.ErrSessionExpired
 	}
 	if strings.Index(getEventPath(e), models.GetProxyPath(s.topo.ProductName)) == 0 {
 		info, err := s.topo.GetProxyInfo(s.info.Id)
 		if err != nil {
 			log.ErrorErrorf(err, "get proxy info failed: %s", s.info.Id)
-			//s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE)
 			return err
 		}
 		switch info.State {
@@ -598,8 +595,8 @@ func (s *Server) reRegister(state string, invokeFromRestart bool) {
 	s.setServerStatus(SERVER_STATUS_STARTING)
 	s.startLock.Unlock()
 	s.info.State = state
-	s.topo.Close(s.info.Id)
-	s.topo.InitZkConn()
+	//s.topo.Close(s.info.Id)
+	//s.topo.InitZkConn()
 	s.register()
 	s.setServerStatus(SERVER_STATUS_STARTED)
 }
@@ -634,7 +631,7 @@ func (s *Server) reRegisterAndFillSlots(state string, invokeFromRestart bool) {
 	s.startLock.Unlock()
 	s.info.State = state
 	s.cleanup()
-	s.topo.InitZkConn()
+	//s.topo.InitZkConn()
 	s.register()
 	// resume normal flag
 	s.topo.watchSuspend.Set(false)
@@ -655,7 +652,9 @@ func (s *Server) setServerStatus(status int) {
 
 func (s *Server) cleanup() {
 	s.topo.watchSuspend.CompareAndSwap(false, true)
-	close(s.evtbus)
-	s.topo.Close(s.info.Id)
-	s.evtbus = make(chan interface{}, 1000)
+	/*
+		close(s.evtbus)
+		s.topo.Close(s.info.Id)
+		s.evtbus = make(chan interface{}, 1000)
+	*/
 }
