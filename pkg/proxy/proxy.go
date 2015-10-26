@@ -118,7 +118,7 @@ func (s *Server) serve() {
 		return
 	}
 
-	s.rewatchNodes(true)
+	s.rewatchNodes()
 
 	s.fillSlots()
 
@@ -212,7 +212,7 @@ func (s *Server) rewatchProxy(invokeFromRestart bool) {
 	}
 }
 
-func (s *Server) rewatchNodes(invokeFromRestart bool) []string {
+func (s *Server) rewatchNodes() []string {
 	var nodes []string
 	var err error
 	for {
@@ -220,11 +220,6 @@ func (s *Server) rewatchNodes(invokeFromRestart bool) []string {
 		if err != nil {
 			log.ErrorErrorf(err, "watch children failed")
 			if s.topo.IsFatalErr(err) {
-				if invokeFromRestart == false {
-					s.reRegisterAndFillSlots(models.PROXY_STATE_ONLINE, invokeFromRestart)
-				} else {
-					s.reRegisterAndReWatchPrxoy(models.PROXY_STATE_ONLINE, invokeFromRestart)
-				}
 				break
 			} else {
 				time.Sleep(5 * time.Second)
@@ -503,7 +498,7 @@ func (s *Server) processAction(e interface{}) error {
 	}
 
 	//re-watch
-	nodes := s.rewatchNodes(false)
+	nodes := s.rewatchNodes()
 
 	seqs, err := models.ExtraSeqList(nodes)
 	if err != nil {
@@ -600,12 +595,13 @@ func (s *Server) reRegister(state string, invokeFromRestart bool) {
 		s.startLock.Unlock()
 		return
 	}
+	s.setServerStatus(SERVER_STATUS_STARTING)
 	s.startLock.Unlock()
 	s.info.State = state
 	s.topo.Close(s.info.Id)
 	s.topo.InitZkConn()
 	s.register()
-	//s.setServerStatus(SERVER_STATUS_STARTED)
+	s.setServerStatus(SERVER_STATUS_STARTED)
 }
 
 func (s *Server) fillSlots() {
@@ -613,8 +609,8 @@ func (s *Server) fillSlots() {
 		refill := false
 		for i := 0; i < router.MaxSlotNum; i++ {
 			if err := s.fillSlot(i); err != nil {
-				s.reRegisterAndReWatchPrxoy(models.PROXY_STATE_ONLINE, true)
-				s.rewatchNodes(true)
+				//s.reRegisterAndReWatchPrxoy(models.PROXY_STATE_ONLINE, true)
+				//s.rewatchNodes(true)
 				refill = true
 				break
 			}
@@ -624,26 +620,6 @@ func (s *Server) fillSlots() {
 		}
 	}
 	log.Warnf("fillSlots end")
-}
-
-func (s *Server) reRegisterAndReWatchPrxoy(state string, invokeFromRestart bool) {
-	s.startLock.Lock()
-	if s.isStarting() && invokeFromRestart == false {
-		log.Warnf("server is restarting")
-		s.startLock.Unlock()
-		return
-	}
-	log.Warnf("server will reWatchPrxoy")
-	s.setServerStatus(SERVER_STATUS_STARTING)
-	s.startLock.Unlock()
-	s.info.State = state
-	s.cleanup()
-	s.topo.InitZkConn()
-	s.register()
-	s.rewatchProxy(invokeFromRestart)
-	s.topo.watchSuspend.Set(false)
-	log.Warnf("server reWatchPrxoy end")
-	//s.setServerStatus(SERVER_STATUS_STARTED)
 }
 
 func (s *Server) reRegisterAndFillSlots(state string, invokeFromRestart bool) {
@@ -660,11 +636,12 @@ func (s *Server) reRegisterAndFillSlots(state string, invokeFromRestart bool) {
 	s.cleanup()
 	s.topo.InitZkConn()
 	s.register()
-	s.rewatchProxy(true)
-	s.rewatchNodes(true)
+	// resume normal flag
 	s.topo.watchSuspend.Set(false)
-	s.fillSlots()
 	s.setServerStatus(SERVER_STATUS_STARTED)
+	s.rewatchProxy(true)
+	s.rewatchNodes()
+	s.fillSlots()
 	log.Warnf("server restarted")
 }
 
