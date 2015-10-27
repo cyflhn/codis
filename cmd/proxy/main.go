@@ -145,6 +145,7 @@ func main() {
 	log.SetFlags(log.Flags() | log.Lshortfile)
 
 	// set info log file
+
 	if s, ok := args["--infoLog"].(string); ok && s != "" {
 		//f, err := log.NewRollingFile(s, maxFileFrag, maxFragSize)
 		f, err := log.GetLogFile(s)
@@ -154,9 +155,9 @@ func main() {
 			defer f.Close()
 			log.InfoLog = log.New(f, "")
 		}
+		log.SetInfoLogLevel(log.LEVEL_INFO)
+		log.SetInfoLogFlags(log.Flags() | log.Lshortfile)
 	}
-	log.SetInfoLogLevel(log.LEVEL_INFO)
-	log.SetInfoLogFlags(log.Flags() | log.Lshortfile)
 
 	// set log level
 	if s, ok := args["--log-level"].(string); ok && s != "" {
