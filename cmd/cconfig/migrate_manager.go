@@ -6,12 +6,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"path"
-	"sort"
-	"time"
-
 	"github.com/wandoulabs/go-zookeeper/zk"
 	"github.com/wandoulabs/zkhelper"
+	"path"
+	"sort"
+	"sync"
+	"time"
 
 	"github.com/wandoulabs/codis/pkg/utils/log"
 )
@@ -35,6 +35,7 @@ type MigrateManager struct {
 	runningTask *MigrateTask
 	zkConn      zkhelper.Conn
 	productName string
+	WaitFail    *sync.WaitGroup
 }
 
 func getMigrateTasksPath(product string) string {
@@ -45,6 +46,7 @@ func NewMigrateManager(zkConn zkhelper.Conn, pn string) *MigrateManager {
 	m := &MigrateManager{
 		zkConn:      zkConn,
 		productName: pn,
+		WaitFail:    &sync.WaitGroup{},
 	}
 	zkhelper.CreateRecursive(m.zkConn, getMigrateTasksPath(m.productName), "", 0, zkhelper.DefaultDirACLs())
 	m.mayRecover()
@@ -80,7 +82,13 @@ func (m *MigrateManager) loop() error {
 		err = t.run()
 		if err != nil {
 			log.ErrorErrorf(err, "migrate failed")
+			m.RemoveMigrations()
+			break
 		}
+		/*if err != nil {
+			m.WaitFail.Add(1)
+			m.WaitFail.Wait()
+		}*/
 	}
 }
 
@@ -111,6 +119,12 @@ func (m *MigrateManager) RemoveMigrations() error {
 	for _, id := range tasks {
 		zkhelper.DeleteRecursive(safeZkConn, getMigrateTasksPath(m.productName)+"/"+id, -1)
 	}
+	return nil
+}
+
+func (m *MigrateManager) RemoveMigrationsForFail() error {
+	m.RemoveMigrations()
+	m.WaitFail.Done()
 	return nil
 }
 

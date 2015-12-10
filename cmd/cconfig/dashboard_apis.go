@@ -541,3 +541,10 @@ func apiRemoveMigration() (int, string) {
 	}
 	return 200, "ok"
 }
+
+func apiRemoveMigrationForFail() (int, string) {
+	if err := globalMigrateManager.RemoveMigrationsForFail(); err != nil {
+		log.Warnf("RemoveMigration error: %+v", err)
+	}
+	return 200, "ok"
+}

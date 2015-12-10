@@ -101,10 +101,12 @@ func (s *Server) SetMyselfOnline() error {
 	}
 	b, _ := json.Marshal(info)
 	url := "http://" + s.conf.dashboardAddr + "/api/proxy"
+	log.Infof("url = %s", url)
 	res, err := http.Post(url, "application/json", bytes.NewReader(b))
 	if err != nil {
 		return err
 	}
+	log.Infof("StatusCode = %d", res.StatusCode)
 	if res.StatusCode != 200 {
 		return errors.New("response code is not 200")
 	}
@@ -484,7 +486,7 @@ func (s *Server) processAction(e interface{}) error {
 		}
 		switch info.State {
 		case models.PROXY_STATE_MARK_OFFLINE:
-			log.Infof("mark offline, proxy got offline event: %s", s.info.Id)
+			log.Warnf("mark offline, proxy got offline event: %s", s.info.Id)
 			s.markOffline()
 		case models.PROXY_STATE_ONLINE:
 			s.rewatchProxy(false)

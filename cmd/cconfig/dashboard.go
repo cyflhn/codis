@@ -261,6 +261,7 @@ func runDashboard(addr string, httpLogFile string) {
 	//check key slot correspondence
 	m.Get("/api/keyslot/(?P<key>.+)", apiKeySlot)
 	m.Get("/api/remove_migration", apiRemoveMigration)
+	m.Get("/api/remove_migration_fail", apiRemoveMigrationForFail)
 	m.Get("/api/proxy/slowop", apiGetProxySlowop)
 	zkBuilder := utils.NewConnBuilder(globalEnv.NewZkConn)
 	safeZkConn = zkBuilder.GetSafeConn()

@@ -148,7 +148,7 @@ func (t *MigrateTask) run() error {
 }
 
 func (t *MigrateTask) rollbackPremigrate() {
-	if s, err := models.GetSlot(t.zkConn, t.productName, t.SlotId); err == nil && s.State.Status == models.SLOT_STATUS_PRE_MIGRATE {
+	if s, err := models.GetSlot(t.zkConn, t.productName, t.SlotId); err == nil && (s.State.Status == models.SLOT_STATUS_PRE_MIGRATE || s.State.Status == models.SLOT_STATUS_MIGRATE) {
 		s.State.Status = models.SLOT_STATUS_ONLINE
 		err = s.Update(t.zkConn)
 		if err != nil {

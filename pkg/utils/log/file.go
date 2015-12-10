@@ -20,7 +20,7 @@ func GetLogFile(filename string) (io.WriteCloser, error) {
 	var f *os.File
 	var err error
 	if checkFileIsExist(filename) {
-		f, err = os.OpenFile(filename, os.O_APPEND|os.O_WRONLY|os.O_TRUNC, 0666)
+		f, err = os.OpenFile(filename, os.O_APPEND|os.O_WRONLY, 0666)
 
 	} else {
 		f, err = os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
