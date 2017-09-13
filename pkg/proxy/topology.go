@@ -283,6 +283,7 @@ func (top *Topology) doWatch(evtch <-chan topo.Event, evtbus chan interface{}) {
 
 func (top *Topology) WatchChildren(path string, evtbus chan interface{}) ([]string, error) {
 	content, _, evtch, err := top.zkConn.ChildrenW(path)
+	log.Warnf("watch: %+v", path)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

@@ -146,6 +146,7 @@ func (s *Server) handleConns() {
 	for {
 		c, err := s.listener.Accept()
 		if err != nil {
+			log.ErrorErrorf(err, "listener Accept failed")
 			return
 		} else {
 			/*
@@ -551,7 +552,7 @@ func (s *Server) loopEvents() {
 	for s.info.State == models.PROXY_STATE_ONLINE {
 		select {
 		case <-s.kill:
-			log.Infof("mark offline, proxy is killed: %s", s.info.Id)
+			log.Warnf("mark offline, proxy is killed: %s", s.info.Id)
 			s.markOffline()
 		case e := <-s.evtbus:
 			if e == nil {
